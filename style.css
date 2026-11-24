@@ -56,8 +56,84 @@ body {
   position: fixed;
   right: max(20px, env(safe-area-inset-right));
   bottom: calc(max(20px, env(safe-area-inset-bottom)) + 26px);
+  max-width: calc(100% - 40px);
   font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  color: rgba(255, 175, 205, 0.3);
+  line-height: 1.5;
+  letter-spacing: 0.06em;
+  text-align: right;
+  color: rgba(255, 175, 205, 0.32);
   pointer-events: none;
+}
+
+.notes {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.note {
+  position: absolute;
+  width: clamp(9.5rem, 19vw, 14rem);
+  margin: 0;
+  padding: 0.45rem 0.45rem 0.6rem;
+  background: linear-gradient(180deg, #fffdf6, #f4ecdf);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  animation: noteFade 0.9s ease forwards;
+}
+
+.note img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #0a0a0a;
+}
+
+.note::before {
+  content: "";
+  position: absolute;
+  top: 0.1rem;
+  left: 50%;
+  width: 2.6rem;
+  height: 0.65rem;
+  transform: translateX(-50%) rotate(-2deg);
+  background: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 1px 2px rgba(92, 64, 51, 0.15);
+}
+
+.note-1 {
+  top: 8%;
+  left: 1.5%;
+  transform: rotate(-6deg);
+  animation-delay: 2.4s;
+}
+
+.note-2 {
+  top: 31%;
+  right: 2%;
+  transform: rotate(5deg);
+  animation-delay: 2.8s;
+}
+
+.note-3 {
+  top: 55%;
+  left: 2.5%;
+  transform: rotate(4deg);
+  animation-delay: 3.2s;
+}
+
+@keyframes noteFade {
+  to { opacity: 0.92; }
+}
+
+@media (max-width: 720px) {
+  .note {
+    width: clamp(5.5rem, 30vw, 9rem);
+    padding: 0.3rem 0.3rem 0.4rem;
+  }
+
+  .note-1 { top: 6%; left: 1%; }
+  .note-2 { top: 30%; right: 1%; }
+  .note-3 { top: 54%; left: 1%; }
 }

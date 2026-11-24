@@ -16,6 +16,7 @@ document.title = `${CONFIG.message} ♥`;
 const TAU = Math.PI * 2;
 const CENTER_Y = -2.5; // vertical center of the heart curve in math space
 const FONT_STACK = `Arial, Helvetica, sans-serif`;
+const CENTER_TEXT = "my love Lolita ♥";
 
 const heartPoint = (t) => ({
   x: 16 * Math.sin(t) ** 3,
@@ -54,7 +55,7 @@ function tAtFrac(frac) {
 
 // Words are pre-rendered once into sprites so each frame is just a drawImage.
 const SPRITE_SCALE = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-const wordSprites = new Map();
+const textSprites = new Map();
 const heartSprites = new Map();
 const measureCtx = document.createElement("canvas").getContext("2d");
 
@@ -65,13 +66,13 @@ const rgbOf = (hex) => {
   return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
 };
 
-function getWordSprite(color, size) {
-  const key = `${color}|${size}`;
-  let sprite = wordSprites.get(key);
+function getTextSprite(text, color, size) {
+  const key = `${text}|${color}|${size}`;
+  let sprite = textSprites.get(key);
   if (sprite) return sprite;
   const font = `600 ${size}px ${FONT_STACK}`;
   measureCtx.font = font;
-  const textW = measureCtx.measureText(CONFIG.message).width;
+  const textW = measureCtx.measureText(text).width;
   const pad = Math.ceil(size * 0.9 + 6);
   const w = Math.ceil(textW + pad * 2);
   const h = Math.ceil(size * 1.7 + pad * 2);
@@ -86,13 +87,15 @@ function getWordSprite(color, size) {
   g.fillStyle = color;
   g.shadowColor = `rgba(${rgbOf(color)},0.85)`;
   g.shadowBlur = Math.max(4, size * 0.55);
-  g.fillText(CONFIG.message, w / 2, h / 2);
+  g.fillText(text, w / 2, h / 2);
   g.shadowBlur = 0;
-  g.fillText(CONFIG.message, w / 2, h / 2);
+  g.fillText(text, w / 2, h / 2);
   sprite = { canvas: c, w, h };
-  wordSprites.set(key, sprite);
+  textSprites.set(key, sprite);
   return sprite;
 }
+
+const getWordSprite = (color, size) => getTextSprite(CONFIG.message, color, size);
 
 function getHeartSprite(color) {
   let sprite = heartSprites.get(color);
@@ -130,6 +133,7 @@ let cx = 0;
 let cy = 0;
 let heartScale = 14;
 let words = [];
+let centerSprite = null;
 const bursts = [];
 const HEART_COLORS = ["#ff9ecb", "#ff6f9c", "#ffe3ee", "#ff4d7e"];
 
@@ -207,6 +211,7 @@ function resize() {
   cx = W / 2;
   cy = H * 0.445;
   heartScale = Math.min(W, H) * (W < H ? 0.0235 : 0.0175);
+  centerSprite = getTextSprite(CENTER_TEXT, "#ffe3ee", Math.round(heartScale * 1.2));
   buildWords();
 }
 
@@ -301,6 +306,24 @@ function drawHeartWords(s) {
     const py = p.spawnY + (cy + y2 * k - p.spawnY) * e;
     ctx.setTransform(dpr * sx, 0, 0, dpr * sy, dpr * px, dpr * py);
     ctx.drawImage(p.sprite, -p.spriteW / 2, -p.spriteH / 2, p.spriteW, p.spriteH);
+  }
+  const cr = Math.min(1, Math.max(0, (t - 2) / 1));
+  if (cr > 0 && centerSprite) {
+    // Sits on the heart's own Z axis, so it stays dead-center as the heart spins;
+    // it's an oriented label, so it only shows while the face is toward the viewer.
+    const face = Math.abs(cosY * cosP);
+    const vis = Math.min(1, Math.max(0, (face - 0.7) / 0.18));
+    if (vis > 0.01) {
+      ctx.globalAlpha = 0.95 * cr * vis;
+      ctx.setTransform(dpr, 0, 0, dpr, dpr * cx, dpr * cy);
+      ctx.drawImage(
+        centerSprite.canvas,
+        -centerSprite.w / 2,
+        -centerSprite.h / 2,
+        centerSprite.w,
+        centerSprite.h,
+      );
+    }
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.restore();
