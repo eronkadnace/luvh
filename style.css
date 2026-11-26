@@ -80,6 +80,19 @@ body {
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.55);
   opacity: 0;
   animation: noteFade 0.9s ease forwards;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  transform: rotate(var(--rot, 0deg));
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.note.dragging {
+  cursor: grabbing;
+  transform: rotate(var(--rot, 0deg)) scale(1.06);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.7);
 }
 
 .note img {
@@ -88,6 +101,9 @@ body {
   aspect-ratio: 4 / 3;
   object-fit: cover;
   background: #0a0a0a;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .note::before {
@@ -105,26 +121,26 @@ body {
 .note-1 {
   top: 8%;
   left: 1.5%;
-  transform: rotate(-6deg);
+  --rot: -6deg;
   animation-delay: 2.4s;
 }
 
 .note-2 {
   top: 31%;
   right: 2%;
-  transform: rotate(5deg);
+  --rot: 5deg;
   animation-delay: 2.8s;
 }
 
 .note-3 {
   top: 55%;
   left: 2.5%;
-  transform: rotate(4deg);
+  --rot: 4deg;
   animation-delay: 3.2s;
 }
 
 @keyframes noteFade {
-  to { opacity: 0.92; }
+  to { opacity: 1; }
 }
 
 @media (max-width: 720px) {

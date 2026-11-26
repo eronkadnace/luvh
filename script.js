@@ -137,6 +137,12 @@ let centerSprite = null;
 const bursts = [];
 const HEART_COLORS = ["#ff9ecb", "#ff6f9c", "#ffe3ee", "#ff4d7e"];
 
+// Timed violet orbs in three fixed zones: above the heart, below it, and inside it.
+const GLOW_PEAK = 0.85; // peak brightness of an orb
+
+const orbs = [];
+let outlinePts = []; // heart rim samples in canvas space, for placement tests
+
 let time = 0;
 
 let yaw = 0.45;
@@ -181,6 +187,9 @@ function createWord(frac, layer) {
     speed: 0.5 + Math.random() * 1.6,
     amp: 1.5 + Math.random() * 2.5,
     twSpeed: 0.8 + Math.random() * 2,
+    glitchy: Math.random() < 0.05, // only some words ever glitch
+    glitchAt: time + 3 + Math.random() * 18,
+    gStart: -1,
   };
 }
 
@@ -212,7 +221,20 @@ function resize() {
   cy = H * 0.445;
   heartScale = Math.min(W, H) * (W < H ? 0.0235 : 0.0175);
   centerSprite = getTextSprite(CENTER_TEXT, "#ffe3ee", Math.round(heartScale * 1.2));
+  outlinePts = [];
+  for (let i = 0; i < 240; i++) {
+    const p = heartPoint((i / 240) * TAU);
+    outlinePts.push([p.x * heartScale, (CENTER_Y - p.y) * heartScale]);
+  }
   buildWords();
+  orbs.length = 0;
+  for (const zone of [0, 1, 2]) {
+    const n = 1 + (Math.random() < 0.5 ? 1 : 0); // 1 or 2 orbs per zone
+    for (let i = 0; i < n; i++) orbs.push(makeOrb(zone));
+  }
+  for (const note of document.querySelectorAll(".note")) {
+    if (note.style.left) clampNote(note); // dropped photos stay reachable on smaller screens
+  }
 }
 
 function spawnBurst(x, y) {
@@ -262,6 +284,124 @@ function updateAndDrawBursts(dt) {
   }
 }
 
+function pointInsideHeart(dx, dy) {
+  let inside = false;
+  for (let i = 0, j = outlinePts.length - 1; i < outlinePts.length; j = i++) {
+    const [xi, yi] = outlinePts[i];
+    const [xj, yj] = outlinePts[j];
+    if (yi > dy !== yj > dy && dx < ((xj - xi) * (dy - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function rimClear(x, y, pad) {
+  const dx = x - cx;
+  const dy = y - cy;
+  for (const [ox, oy] of outlinePts) {
+    if ((dx - ox) ** 2 + (dy - oy) ** 2 < pad * pad) return false;
+  }
+  return true;
+}
+
+function pickZoneSpot(zone, r, others) {
+  const pad = r * 1.4 + Math.max(16, heartScale);
+  const noteRects = [...document.querySelectorAll(".note")].map((n) => n.getBoundingClientRect());
+  const labelW = (centerSprite ? centerSprite.w / 2 : 0) + pad;
+  const labelH = (centerSprite ? centerSprite.h / 2 : 0) + pad;
+  for (let i = 0; i < 90; i++) {
+    let x;
+    let y;
+    if (zone === 2) {
+      x = cx + (Math.random() * 2 - 1) * 12 * heartScale;
+      y = cy + (Math.random() * 2 - 1) * 10 * heartScale;
+      if (!pointInsideHeart(x - cx, y - cy) || !rimClear(x, y, pad)) continue;
+    } else if (zone === 0) {
+      const yMax = cy - 4 * heartScale;
+      if (yMax - 0.05 * H < 20) continue;
+      x = (0.07 + Math.random() * 0.86) * W;
+      y = 0.05 * H + Math.random() * (yMax - 0.05 * H);
+      if (pointInsideHeart(x - cx, y - cy) || !rimClear(x, y, pad)) continue;
+    } else {
+      const yMin = cy + 4 * heartScale;
+      if (0.95 * H - yMin < 20) continue;
+      x = (0.07 + Math.random() * 0.86) * W;
+      y = yMin + Math.random() * (0.95 * H - yMin);
+      if (pointInsideHeart(x - cx, y - cy) || !rimClear(x, y, pad)) continue;
+    }
+    if (Math.abs(x - cx) < labelW && Math.abs(y - cy) < labelH) continue;
+    if (noteRects.some((rc) => x > rc.left - pad && x < rc.right + pad && y > rc.top - pad && y < rc.bottom + pad))
+      continue;
+    if (others.some((o) => o.on && Math.hypot(x - o.x, y - o.y) < (r + o.r) * 1.05 + 14)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
+function makeOrb(zone) {
+  return {
+    zone,
+    x: 0,
+    y: 0,
+    on: false,
+    r: 0,
+    period: 3.5 + Math.random() * 3.5,
+    phase: Math.random() * 10,
+    cycle: -1,
+  };
+}
+
+function respawnOrb(o) {
+  const min = Math.min(W, H);
+  o.r = (o.zone === 2 ? 0.018 + Math.random() * 0.027 : 0.022 + Math.random() * 0.053) * min;
+  const spot = pickZoneSpot(
+    o.zone,
+    o.r,
+    orbs.filter((p) => p !== o),
+  );
+  o.on = !!spot;
+  if (spot) {
+    o.x = spot.x;
+    o.y = spot.y;
+  }
+}
+
+function drawGlow() {
+  for (const o of orbs) {
+    const t = time + o.phase;
+    const cycle = Math.floor(t / o.period);
+    if (cycle !== o.cycle) {
+      o.cycle = cycle; // relocates at the dimmest point, so the move is invisible
+      respawnOrb(o);
+    }
+    if (!o.on) continue;
+    const k = t / o.period - cycle;
+    const env = 0.12 + 0.88 * Math.sin(Math.PI * k) ** 2;
+    const a = GLOW_PEAK * env;
+    if (a < 0.01) continue;
+    const R = o.r * (1 + 0.35 * k);
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, R);
+    g.addColorStop(0, `rgba(205, 150, 255, ${a})`);
+    g.addColorStop(0.12, `rgba(190, 130, 255, ${a * 0.82})`);
+    g.addColorStop(0.25, `rgba(178, 115, 255, ${a * 0.6})`);
+    g.addColorStop(0.4, `rgba(165, 100, 255, ${a * 0.38})`);
+    g.addColorStop(0.55, `rgba(152, 85, 255, ${a * 0.22})`);
+    g.addColorStop(0.7, `rgba(140, 72, 255, ${a * 0.11})`);
+    g.addColorStop(0.85, `rgba(130, 62, 255, ${a * 0.04})`);
+    g.addColorStop(1, "rgba(120, 55, 255, 0)");
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = g;
+    ctx.fillRect(o.x - R, o.y - R, R * 2, R * 2);
+    ctx.restore();
+  }
+}
+
+// Deterministic 0–1 hash so glitch jumps stutter at a steady rate.
+const hash01 = (n) => {
+  const v = Math.sin(n) * 43758.5453;
+  return v - Math.floor(v);
+};
+
 function drawHeartWords(s) {
   const D = Math.min(W, H) * 1.25; // camera distance for perspective
   const cosY = Math.cos(yaw);
@@ -280,6 +420,29 @@ function drawHeartWords(s) {
     const e = 1 - (1 - r) ** 3; // fast off the mark, soft settle
     const fade = Math.min(1, r * 2.2);
 
+    // Occasional glitch: a few settled words jump hard in stuttery steps, then snap back.
+    if (p.glitchy && r === 1 && t >= p.glitchAt) {
+      p.gStart = t;
+      p.gDur = 0.45 + Math.random() * 0.5;
+      p.gSeed = Math.random() * 1000;
+      p.gAmp = (0.35 + Math.random() * 0.65) * Math.min(W, H) * 0.22;
+      p.gStep = 10 + Math.random() * 8;
+      p.glitchAt = t + p.gDur + 6 + Math.random() * 16;
+    }
+    let gx = 0;
+    let gy = 0;
+    let flick = 1;
+    if (p.gStart >= 0) {
+      if (t - p.gStart >= p.gDur) {
+        p.gStart = -1; // snap straight back into the heart
+      } else {
+        const step = Math.floor(t * p.gStep);
+        gx = (hash01(step * 1.37 + p.gSeed) * 2 - 1) * p.gAmp;
+        gy = (hash01(step * 2.11 + p.gSeed) * 2 - 1) * p.gAmp * 0.75;
+        if (hash01(step * 0.73 + p.gSeed) > 0.72) flick = 0.3;
+      }
+    }
+
     const wx = p.x * s + Math.sin(t * p.speed + p.phase) * p.amp;
     const wy = p.y * s + Math.cos(t * p.speed * 0.85 + p.phase * 1.6) * p.amp * 0.85;
     const wz = p.z * s;
@@ -291,19 +454,20 @@ function drawHeartWords(s) {
 
     const k = D / Math.max(D * 0.5, D - z2);
     const depth = Math.max(-1, Math.min(1, z2 / (s * 14)));
-    ctx.globalAlpha = Math.min(
-      1,
-      p.alpha *
-        (0.88 + 0.12 * Math.sin(t * p.twSpeed + p.phase)) *
-        (0.62 + 0.38 * depth) *
-        (0.5 + 0.5 * hScale) *
-        fade,
-    );
+    ctx.globalAlpha =
+      Math.min(
+        1,
+        p.alpha *
+          (0.88 + 0.12 * Math.sin(t * p.twSpeed + p.phase)) *
+          (0.62 + 0.38 * depth) *
+          (0.5 + 0.5 * hScale) *
+          fade,
+      ) * flick;
     const pop = 0.55 + 0.45 * e;
     const sx = hScale * k * pop;
     const sy = vScale * k * pop;
-    const px = p.spawnX + (cx + x1 * k - p.spawnX) * e;
-    const py = p.spawnY + (cy + y2 * k - p.spawnY) * e;
+    const px = p.spawnX + (cx + x1 * k - p.spawnX) * e + gx;
+    const py = p.spawnY + (cy + y2 * k - p.spawnY) * e + gy;
     ctx.setTransform(dpr * sx, 0, 0, dpr * sy, dpr * px, dpr * py);
     ctx.drawImage(p.sprite, -p.spriteW / 2, -p.spriteH / 2, p.spriteW, p.spriteH);
   }
@@ -349,6 +513,7 @@ function frame(now) {
   updateRotation(dt);
 
   ctx.clearRect(0, 0, W, H);
+  drawGlow();
   drawHeartWords(heartScale);
   updateAndDrawBursts(dt);
 
@@ -406,5 +571,57 @@ window.addEventListener("pointercancel", () => {
 window.addEventListener("keydown", (e) => {
   if (e.code === "Space" || e.key === "Enter") spawnBurst(cx, cy);
 });
+
+// Polaroids can be picked up and dropped anywhere, staying partly on screen.
+function clampNote(note) {
+  const w = note.offsetWidth;
+  const h = note.offsetHeight;
+  const x = parseFloat(note.style.left) || 0;
+  const y = parseFloat(note.style.top) || 0;
+  note.style.left = `${Math.min(Math.max(x, -w * 0.2), W - w * 0.8)}px`;
+  note.style.top = `${Math.min(Math.max(y, -h * 0.2), H - h * 0.8)}px`;
+}
+
+let noteZ = 10;
+
+for (const note of document.querySelectorAll(".note")) {
+  let pid = null;
+  let grabX = 0;
+  let grabY = 0;
+  let baseX = 0;
+  let baseY = 0;
+
+  note.addEventListener("pointerdown", (e) => {
+    if (pid !== null) return;
+    pid = e.pointerId;
+    note.setPointerCapture(pid);
+    baseX = note.offsetLeft;
+    baseY = note.offsetTop;
+    note.style.left = `${baseX}px`;
+    note.style.top = `${baseY}px`;
+    note.style.right = "auto";
+    note.style.zIndex = ++noteZ;
+    grabX = e.clientX;
+    grabY = e.clientY;
+    note.classList.add("dragging");
+    e.stopPropagation();
+  });
+
+  note.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== pid) return;
+    note.style.left = `${baseX + e.clientX - grabX}px`;
+    note.style.top = `${baseY + e.clientY - grabY}px`;
+    clampNote(note);
+  });
+
+  const drop = (e) => {
+    if (e.pointerId !== pid) return;
+    pid = null;
+    note.classList.remove("dragging");
+    if (note.hasPointerCapture(e.pointerId)) note.releasePointerCapture(e.pointerId);
+  };
+  note.addEventListener("pointerup", drop);
+  note.addEventListener("pointercancel", drop);
+}
 
 requestAnimationFrame(frame);
