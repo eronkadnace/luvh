@@ -137,6 +137,286 @@ let centerSprite = null;
 const bursts = [];
 const HEART_COLORS = ["#ff9ecb", "#ff6f9c", "#ffe3ee", "#ff4d7e"];
 
+/* ── Small symbol-flower companions ──────────────────────────── */
+const FLOWER = {
+  glyphs: ["-", "_", "=", "+", ">", "<", "*", "~", "^", ":", "/", "\\", "·"],
+  coreGlyphs: ["*", "+", "·", ":"],
+  wordsPerRing: 190,
+  glyphSize: 8,
+  spin: 0.5,
+  colors: {
+    petal: ["#ffd7e6", "#ff9ec4", "#ff6fa5"],
+    core: ["#ffd98a", "#ffb347", "#fff3d6"],
+  },
+};
+const F_PETAL_L = 16;
+const F_PETAL_W = 3.8;
+const fOutline = [];
+{
+  const N = 140;
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * TAU;
+    fOutline.push([F_PETAL_W * Math.sin(a), (F_PETAL_L / 2) * (1 - Math.cos(a))]);
+  }
+}
+const fOutlineLen = [0];
+{
+  let acc = 0;
+  for (let i = 1; i < fOutline.length; i++) {
+    acc += Math.hypot(fOutline[i][0] - fOutline[i - 1][0], fOutline[i][1] - fOutline[i - 1][1]);
+    fOutlineLen.push(acc);
+  }
+}
+function fOutlineAt(frac, scale) {
+  const target = frac * fOutlineLen[fOutlineLen.length - 1];
+  let lo = 0;
+  let hi = fOutlineLen.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (fOutlineLen[mid] < target) lo = mid;
+    else hi = mid;
+  }
+  const span = fOutlineLen[hi] - fOutlineLen[lo] || 1;
+  const k = (target - fOutlineLen[lo]) / span;
+  return [
+    (fOutline[lo][0] + (fOutline[hi][0] - fOutline[lo][0]) * k) * scale,
+    (fOutline[lo][1] + (fOutline[hi][1] - fOutline[lo][1]) * k) * scale,
+  ];
+}
+const fSmooth = (x) => x * x * (3 - 2 * x);
+const fEaseOutBack = (x, c1) => {
+  const c3 = c1 + 1;
+  return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2;
+};
+// Five companions in the gaps around the heart; every bloom is its own random
+// flower — shape, size, curl and timing — and opens once, never closes.
+const FLOWER_SPOTS = [
+  [0.86, 0.1],
+  [0.88, 0.62],
+  [0.8, 0.82],
+  [0.32, 0.84],
+  [0.92, 0.245],
+];
+const flowers = FLOWER_SPOTS.map(([sx, sy], i) => {
+  const lenK = 0.85 + Math.random() * 0.35;
+  const widK = 0.8 + Math.random() * 0.5;
+  return {
+    sx,
+    sy,
+    x: 0,
+    y: 0,
+    scale: 3,
+    cacheR: 60,
+    sizeK: i === 4 ? 0.003 + Math.random() * 0.0004 : 0.0036 + Math.random() * 0.0022,
+    yaw: 0.35,
+    pitch: 0.38,
+    spinZ: 0,
+    spinDir: Math.random() < 0.5 ? -1 : 1,
+    petals: 6 + ((Math.random() * 5) | 0),
+    rings: Math.random() < 0.35 ? [1, 0.72, 0.46] : [1, 0.6 + Math.random() * 0.18],
+    L: F_PETAL_L * lenK,
+    W: F_PETAL_W * widK,
+    lenK,
+    widK,
+    coreK: 0.8 + Math.random() * 0.45,
+    cup: 1.1 + Math.random(),
+    bowl: 7 + Math.random() * 4,
+    recurve: 1.6 + Math.random() * 1.4,
+    fold: 1.05 + Math.random() * 0.5,
+    tipFirst: Math.random() < 0.3,
+    bloomDur: 1.3 + Math.random(),
+    overshoot: 0.8 + Math.random() * 0.9,
+    lagSpread: 0.5 + Math.random() * 1.1,
+    whiteK: 0.45 + Math.random() * 0.3,
+    glyphs: [...FLOWER.glyphs].sort(() => Math.random() - 0.5).slice(0, 8 + ((Math.random() * 4) | 0)),
+    bloomStart: 1 + Math.random() * 9,
+    petalVar: Array.from({ length: 16 }, () => ({
+      len: 0.9 + Math.random() * 0.2,
+      tilt: (Math.random() - 0.5) * 0.16,
+      lag: Math.random(),
+      skew: (Math.random() - 0.5) * 0.5,
+    })),
+    words: [],
+    cache: document.createElement("canvas"),
+    g: null,
+    settled: false,
+    fadeDur: 0.7 + Math.random() * 0.5,
+    breatheSpeed: 0.6 + Math.random() * 0.8,
+    breathePhase: Math.random() * TAU,
+  };
+});
+for (const f of flowers) f.g = f.cache.getContext("2d");
+
+function fPetalBloom(f, petal, t) {
+  const lag = f.petalVar[petal].lag * f.lagSpread;
+  const r = Math.min(1, Math.max(0, (t - f.bloomStart - lag) / f.bloomDur));
+  return fEaseOutBack(r, f.overshoot); // opens once, never closes
+}
+
+function fMakeGlyph(f, lx, ly, petal, z0, palette, glyphs, sizeBase) {
+  const color = Math.random() < f.whiteK ? "#ffffff" : palette[(Math.random() * palette.length) | 0];
+  const glyph = glyphs[(Math.random() * glyphs.length) | 0];
+  const size = Math.max(2, Math.round((sizeBase + Math.random() * sizeBase) * (f.scale / 16)));
+  const sprite = getTextSprite(glyph, color, size);
+  return {
+    lx,
+    ly,
+    petal,
+    z0,
+    sprite: sprite.canvas,
+    spriteW: sprite.w,
+    spriteH: sprite.h,
+    alpha: 0.75 + Math.random() * 0.25,
+    phase: Math.random() * TAU,
+    speed: 0.5 + Math.random() * 1.4,
+    amp: 0.6 + Math.random() * 1.2,
+    twSpeed: 0.8 + Math.random() * 2,
+  };
+}
+
+function fBuildWords(f) {
+  f.words = [];
+  for (let p = 0; p < f.petals; p++) {
+    for (const ring of f.rings) {
+      const n = Math.round(FLOWER.wordsPerRing * ring);
+      for (let i = 0; i < n; i++) {
+        const shell = ring * (0.92 + Math.random() * 0.16);
+        const [ox, oy] = fOutlineAt(((i + Math.random() * 0.7) / n) % 1, shell);
+        const lx = ox * f.widK + (Math.random() - 0.5) * 0.5 * f.widK;
+        const ly = oy * f.lenK + (Math.random() - 0.5) * 0.5 * f.lenK;
+        if (ly < 2.4 * f.lenK) continue;
+        f.words.push(fMakeGlyph(f, lx, ly, p, 0, FLOWER.colors.petal, f.glyphs, FLOWER.glyphSize));
+      }
+    }
+  }
+  for (const [r, n] of [[0.9, 20], [2.0, 40], [3.0, 56], [3.8, 72]]) {
+    for (let i = 0; i < n; i++) {
+      const a = ((i + Math.random() * 0.6) / n) * TAU;
+      const w = fMakeGlyph(
+        f,
+        Math.cos(a) * r * f.coreK,
+        Math.sin(a) * r * f.coreK,
+        -1,
+        (4.2 - r) * 0.4 * f.coreK,
+        FLOWER.colors.core,
+        FLOWER.coreGlyphs,
+        FLOWER.glyphSize * 0.75,
+      );
+      w.alpha = 0.9 + Math.random() * 0.1;
+      f.words.push(w);
+    }
+  }
+}
+
+// Each flower renders into its own cached bitmap. Once settled the bitmap is
+// reused untouched; spin and idle breathe happen on the single blit instead.
+function fRender(f, t) {
+  const g = f.g;
+  const s = f.scale;
+  const R = f.cacheR;
+  const D = Math.min(W, H) * 1.4;
+  const cosY = Math.cos(f.yaw);
+  const sinY = Math.sin(f.yaw);
+  const cosP = Math.cos(f.pitch);
+  const sinP = Math.sin(f.pitch);
+  const coreBreath = 1 + 0.05 * Math.sin(t * 1.4);
+  const gO = Math.min(1, Math.max(0, fPetalBloom(f, 0, t)));
+  const coreK = coreBreath * (0.3 + 0.7 * gO);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, R * 2, R * 2);
+  g.globalCompositeOperation = "lighter";
+  for (const p of f.words) {
+    const isCore = p.petal < 0;
+    const o = isCore ? 1 : fPetalBloom(f, p.petal, t);
+    const ok = Math.min(1, o);
+    let x = p.lx * (isCore ? coreK : 1);
+    let y = p.ly * (isCore ? coreK : 1);
+    let z = isCore ? p.z0 * (0.3 + 0.7 * gO) : p.z0;
+    let ang;
+    if (isCore) {
+      ang = 0;
+    } else {
+      const pv = f.petalVar[p.petal];
+      const v = Math.min(1, p.ly / f.L);
+      const u = p.lx / f.W;
+      const wave = f.tipFirst ? 1 - v : v;
+      const ol = fSmooth(Math.min(1, Math.max(0, ok * 1.35 - wave * 0.35)));
+      x = p.lx * (0.35 + 0.65 * ol) + pv.skew * Math.sin(Math.PI * v) * ol;
+      y = p.ly * (0.5 + 0.5 * ol) * pv.len;
+      z =
+        p.z0 +
+        f.cup * ol * u * u * (0.35 + 0.65 * Math.sin(Math.PI * v)) +
+        ol * (f.bowl * v * v - f.recurve * v ** 4) +
+        (p.petal % 2) * 1.1 * ol;
+      const fold =
+        (1 - ol) * f.fold +
+        pv.tilt * ol +
+        Math.sin(t * 0.9 + p.petal * 1.7) * 0.05 * ol;
+      const cf = Math.cos(fold);
+      const sf = Math.sin(fold);
+      const ry = y * cf - z * sf;
+      z = y * sf + z * cf;
+      y = ry;
+      ang = (p.petal / f.petals) * TAU;
+    }
+    const ca = Math.cos(ang);
+    const sa = Math.sin(ang);
+    const X = x * ca - y * sa;
+    const Y = x * sa + y * ca;
+    const wx = X * s + Math.sin(t * p.speed + p.phase) * p.amp;
+    const wy = Y * s + Math.cos(t * p.speed * 0.85 + p.phase * 1.6) * p.amp * 0.85;
+    const wz = z * s;
+    const x1 = wx * cosY + wz * sinY;
+    const z1 = wz * cosY - wx * sinY;
+    const y2 = wy * cosP - z1 * sinP;
+    const z2 = wy * sinP + z1 * cosP;
+    const k = D / Math.max(D * 0.5, D - z2);
+    const depth = Math.max(-1, Math.min(1, z2 / (s * 12)));
+    g.globalAlpha = Math.min(
+      1,
+      p.alpha *
+        (0.88 + 0.12 * Math.sin(t * p.twSpeed + p.phase)) *
+        (0.5 + 0.5 * depth) *
+        (isCore ? 0.35 + 0.65 * gO : 0.22 + 0.78 * fSmooth(Math.min(1, o * 3))),
+    );
+    g.setTransform(dpr * k, 0, 0, dpr * k, dpr * (R + x1 * k), dpr * (R + y2 * k));
+    g.drawImage(p.sprite, -p.spriteW / 2, -p.spriteH / 2, p.spriteW, p.spriteH);
+  }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.globalCompositeOperation = "source-over";
+}
+
+function fLayout() {
+  for (const f of flowers) {
+    f.scale = Math.min(W, H) * f.sizeK;
+    f.x = W * f.sx;
+    f.y = H * f.sy;
+    f.cacheR = Math.ceil(f.scale * 24);
+    f.cache.width = f.cache.height = Math.ceil(f.cacheR * 2 * dpr);
+    fBuildWords(f);
+    f.settled = false;
+  }
+}
+
+function drawFlowers() {
+  for (const f of flowers) {
+    // Each flower fades in over the moment just before its bloom starts.
+    const fadeK = fSmooth(Math.min(1, Math.max(0, (time - f.bloomStart + f.fadeDur) / f.fadeDur)));
+    if (fadeK <= 0) continue;
+    const bloomingNow = time > f.bloomStart - 0.05 && time < f.bloomStart + f.bloomDur + 1.9;
+    if (bloomingNow || dragTarget === f || !f.settled) {
+      fRender(f, time);
+      if (!bloomingNow && dragTarget !== f) f.settled = true;
+    }
+    ctx.save();
+    ctx.globalAlpha = fadeK * (0.9 + 0.1 * Math.sin(time * f.breatheSpeed + f.breathePhase));
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.spinZ);
+    ctx.drawImage(f.cache, -f.cacheR, -f.cacheR, f.cacheR * 2, f.cacheR * 2);
+    ctx.restore();
+  }
+}
+
 // Timed violet orbs in three fixed zones: above the heart, below it, and inside it.
 const GLOW_PEAK = 0.85; // peak brightness of an orb
 
@@ -147,10 +427,10 @@ let time = 0;
 
 let yaw = 0.45;
 let pitch = 0.1;
-let yawVel = 0;
-let pitchVel = 0;
-let lastInteract = -1e6;
 const ptr = { active: false, dragging: false, moved: 0, lastX: 0, lastY: 0, lastT: 0 };
+let hoverX = null;
+let hoverY = null;
+let dragTarget = null;
 
 const LAYER_OFFSETS = [-11, -4, 4, 11]; // px offsets from the curve, scaled with heart size
 
@@ -221,6 +501,7 @@ function resize() {
   cy = H * 0.445;
   heartScale = Math.min(W, H) * (W < H ? 0.0235 : 0.0175);
   centerSprite = getTextSprite(CENTER_TEXT, "#ffe3ee", Math.round(heartScale * 1.2));
+  fLayout();
   outlinePts = [];
   for (let i = 0; i < 240; i++) {
     const p = heartPoint((i / 240) * TAU);
@@ -495,12 +776,13 @@ function drawHeartWords(s) {
 
 function updateRotation(dt) {
   if (ptr.active) return;
-  yaw += yawVel * dt;
-  pitch = Math.max(-0.6, Math.min(0.6, pitch + pitchVel * dt));
-  const damp = Math.exp(-3.5 * dt);
-  yawVel *= damp;
-  pitchVel *= damp;
-  if (performance.now() - lastInteract > 4000) yaw += CONFIG.spin * dt;
+  // Objects turn only while hovered or swiped — no idle spin.
+  if (hoverX !== null && pointInsideHeart(hoverX - cx, hoverY - cy)) yaw += CONFIG.spin * dt;
+  if (hoverX !== null) {
+    for (const f of flowers) {
+      if (Math.hypot(hoverX - f.x, hoverY - f.y) < f.scale * 18) f.spinZ += FLOWER.spin * f.spinDir * dt;
+    }
+  }
 }
 
 let prev = performance.now();
@@ -515,6 +797,7 @@ function frame(now) {
   ctx.clearRect(0, 0, W, H);
   drawGlow();
   drawHeartWords(heartScale);
+  drawFlowers();
   updateAndDrawBursts(dt);
 
   requestAnimationFrame(frame);
@@ -531,12 +814,17 @@ window.addEventListener("pointerdown", (e) => {
   ptr.lastX = e.clientX;
   ptr.lastY = e.clientY;
   ptr.lastT = performance.now();
-  lastInteract = ptr.lastT;
+  hoverX = e.clientX;
+  hoverY = e.clientY;
+  dragTarget =
+    flowers.find((f) => Math.hypot(e.clientX - f.x, e.clientY - f.y) < f.scale * 18) ||
+    (pointInsideHeart(e.clientX - cx, e.clientY - cy) ? "heart" : null);
 });
 
 window.addEventListener("pointermove", (e) => {
+  hoverX = e.clientX;
+  hoverY = e.clientY;
   if (!ptr.active) return;
-  const now = performance.now();
   const dx = e.clientX - ptr.lastX;
   const dy = e.clientY - ptr.lastY;
   ptr.lastX = e.clientX;
@@ -544,28 +832,40 @@ window.addEventListener("pointermove", (e) => {
   ptr.moved += Math.abs(dx) + Math.abs(dy);
   if (ptr.moved > 10) ptr.dragging = true;
   if (!ptr.dragging) return;
-  const dt = Math.max((now - ptr.lastT) / 1000, 0.008);
-  ptr.lastT = now;
-  yaw += dx * 0.0065;
-  pitch = Math.max(-0.6, Math.min(0.6, pitch + dy * 0.0045));
-  yawVel = Math.max(-8, Math.min(8, (dx * 0.0065) / dt));
-  pitchVel = Math.max(-5, Math.min(5, (dy * 0.0045) / dt));
-  lastInteract = now;
+  ptr.lastT = performance.now();
+  if (dragTarget === "heart") {
+    yaw += dx * 0.0065;
+    pitch = Math.max(-0.6, Math.min(0.6, pitch + dy * 0.0045));
+  } else if (dragTarget && dragTarget !== "heart") {
+    dragTarget.yaw += dx * 0.0065;
+    dragTarget.pitch = Math.max(-1.2, Math.min(1.2, dragTarget.pitch + dy * 0.0045));
+  }
 });
 
 window.addEventListener("pointerup", (e) => {
   if (ptr.active && !ptr.dragging) spawnBurst(e.clientX, e.clientY);
   ptr.active = false;
   ptr.dragging = false;
-  yawVel *= 0.5;
-  pitchVel *= 0.5;
-  lastInteract = performance.now();
+  if (dragTarget && dragTarget !== "heart") dragTarget.settled = false;
+  dragTarget = null;
+  if (e.pointerType !== "mouse") {
+    hoverX = null;
+    hoverY = null;
+  }
 });
 
 window.addEventListener("pointercancel", () => {
   ptr.active = false;
   ptr.dragging = false;
-  lastInteract = performance.now();
+  if (dragTarget && dragTarget !== "heart") dragTarget.settled = false;
+  dragTarget = null;
+});
+
+window.addEventListener("pointerout", (e) => {
+  if (!e.relatedTarget) {
+    hoverX = null;
+    hoverY = null;
+  }
 });
 
 window.addEventListener("keydown", (e) => {
